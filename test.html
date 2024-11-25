@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Presence Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        #status {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+        #status.online {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        #status.offline {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        #messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .received { background-color: #e3f2fd; }
+        .sent { background-color: #f5f5f5; }
+        .system { background-color: #fff3e0; }
+        .error { background-color: #ffebee; }
+        .heartbeat { background-color: #f3e5f5; font-size: 0.9em; }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+        }
+        button:hover { opacity: 0.9; }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            flex-grow: 1;
+        }
+        #userId {
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div id="status" class="offline">Estado: Desconectado</div>
+    <div class="controls">
+        <input type="text" id="userId" placeholder="ID de usuario" value="test-user-1">
+        <button onclick="connect()" id="connectBtn">Conectar</button>
+        <button onclick="disconnect()" id="disconnectBtn" disabled>Desconectar</button>
+    </div>
+    <div id="messages"></div>
+    <div class="controls">
+        <input type="text" id="messageInput" placeholder="Escribe un mensaje..." disabled>
+        <button onclick="sendMessage()" id="sendBtn" disabled>Enviar</button>
+    </div>
+
+    <script>
+        let ws;
+        let heartbeatInterval;
+
+        function connect() {
+            const userId = document.getElementById('userId').value.trim();
+            if (!userId) {
+                addMessage('Por favor, ingresa un ID de usuario', 'error');
+                return;
+            }
+
+            ws = new WebSocket(`ws://localhost:3000?userId=${userId}`);
+            
+            ws.onopen = () => {
+                const statusDiv = document.getElementById('status');
+                statusDiv.textContent = 'Estado: Conectado';
+                statusDiv.className = 'online';
+                addMessage('Conectado al servidor', 'system');
+                
+                // Habilitar/deshabilitar controles
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+                document.getElementById('messageInput').disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+                document.getElementById('userId').disabled = true;
+
+                // Iniciar heartbeat
+                startHeartbeat();
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'heartbeat') {
+                        addMessage('♥ Heartbeat recibido', 'heartbeat');
+                        // Enviar acknowledgment
+                        ws.send(JSON.stringify({
+                            type: 'heartbeat_ack',
+                            timestamp: new Date().toISOString()
+                        }));
+                    } else {
+                        addMessage(`📥 Recibido: ${JSON.stringify(data, null, 2)}`, 'received');
+                    }
+                } catch (error) {
+                    addMessage(`Error al procesar mensaje: ${error.message}`, 'error');
+                }
+            };
+
+            ws.onclose = () => {
+                const statusDiv = document.getElementById('status');
+                statusDiv.textContent = 'Estado: Desconectado';
+                statusDiv.className = 'offline';
+                addMessage('Desconectado del servidor', 'system');
+                stopHeartbeat();
+                resetControls();
+            };
+
+            ws.onerror = (error) => {
+                addMessage(`Error de WebSocket: ${error.message}`, 'error');
+                stopHeartbeat();
+                resetControls();
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+            }
+        }
+
+        function resetControls() {
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('messageInput').disabled = true;
+            document.getElementById('sendBtn').disabled = true;
+            document.getElementById('userId').disabled = false;
+        }
+
+        function startHeartbeat() {
+            stopHeartbeat();
+            heartbeatInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    addMessage('♥ Enviando heartbeat', 'heartbeat');
+                    ws.send(JSON.stringify({
+                        type: 'heartbeat',
+                        timestamp: new Date().toISOString()
+                    }));
+                }
+            }, 30000);
+        }
+
+        function stopHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+        }
+
+        function sendMessage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('No hay conexión con el servidor', 'error');
+                return;
+            }
+
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (message) {
+                const data = {
+                    type: 'message',
+                    content: message,
+                    timestamp: new Date().toISOString()
+                };
+                
+                ws.send(JSON.stringify(data));
+                addMessage(`📤 Enviado: ${JSON.stringify(data, null, 2)}`, 'sent');
+                input.value = '';
+            }
+        }
+
+        function addMessage(message, type) {
+            const messagesDiv = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            messageElement.className = `message ${type}`;
+            messageElement.textContent = message;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Permitir enviar mensaje con Enter
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
